@@ -1,0 +1,12 @@
+Maya: Morning crew, kickoff notes are here https://boathackathon.com/
+Rene: Nice, I read the sponsor page too https://boat.dev/
+Maya: We decided to keep the idea simple, a helper in the team chat
+Rene: Agreed, going with the name First Mate
+Maya: TODO Rene, please set up the Boat VM by tomorrow
+Rene: I will build the first version by Friday
+Maya: I will write the demo script by Friday
+Sam: Someone needs to check the private model route before demo day
+Sam: Messy note, we had three tabs open, links everywhere, no clear list of tasks
+Maya: Decision: the demo is just paste a chat, get a Ship Log, nothing else
+Rene: That context link was useful https://www.context.dev/
+Sam: Final: keep all team notes private, do not send them to random tools

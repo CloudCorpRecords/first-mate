@@ -1,0 +1,2 @@
+# First Mate uses the Python 3 standard library only.
+# There is nothing to install here.

@@ -15,6 +15,17 @@ from dataclasses import dataclass, field
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 SPEAKER_RE = re.compile(r"^([A-Za-z][A-Za-z .'-]{0,40}):\s+(.*)$")
 
+# Input limits for one run. They are generous for a team chat and exist
+# so a bad paste or a wrong file fails with a clear message instead of
+# a long hang or a traceback.
+MAX_INPUT_CHARS = 1_000_000
+MAX_MESSAGES = 10_000
+
+
+class InputError(ValueError):
+    """Chat input that cannot be used. The message is safe to show to
+    the user, it explains what is wrong and what to do instead."""
+
 DECISION_MARKERS = (
     "decided",
     "decision:",
@@ -61,10 +72,24 @@ class Transcript:
 
 
 def _clean(text: str) -> str:
+    # Drop control characters (a pasted export can carry them), then
+    # collapse whitespace as before.
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
 def parse_transcript(text: str) -> Transcript:
+    if text is None or not text.strip():
+        raise InputError(
+            "The chat text is empty. Paste or pass a team chat with at "
+            "least one message in it."
+        )
+    if len(text) > MAX_INPUT_CHARS:
+        raise InputError(
+            f"The chat text is too large ({len(text)} characters). First Mate "
+            f"accepts up to {MAX_INPUT_CHARS} characters per run. Split the "
+            "chat into parts and run each part."
+        )
     result = Transcript()
     seen_links: set[str] = set()
     for raw in text.splitlines():
@@ -78,6 +103,12 @@ def parse_transcript(text: str) -> Transcript:
             speaker, body = "Team", line
         body = _clean(body)
         result.messages.append(Message(speaker=speaker, text=body))
+        if len(result.messages) > MAX_MESSAGES:
+            raise InputError(
+                f"The chat has more than {MAX_MESSAGES} messages. First Mate "
+                "accepts up to that many per run. Split the chat into parts "
+                "and run each part."
+            )
 
         for url in URL_RE.findall(body):
             url = url.rstrip(".,;")

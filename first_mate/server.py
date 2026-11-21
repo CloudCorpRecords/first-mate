@@ -18,7 +18,13 @@ from urllib.parse import parse_qs
 from .cli import health_payload
 from .config import load_config
 from .ship_log import build_ship_log, render_accesses_html, save_ship_log
+from .transcript import InputError
 from pathlib import Path
+
+# Largest form body accepted. The chat text limit itself is enforced
+# by the parser; this cap only stops a broken or hostile client from
+# making the server read without bound.
+MAX_REQUEST_BYTES = 2_000_000
 
 HOME_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -60,7 +66,21 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/ship-log":
             self._send(404, "text/plain", b"Not found")
             return
-        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._send(400, "text/plain", b"Bad Content-Length header.")
+            return
+        if length < 0:
+            self._send(400, "text/plain", b"Bad Content-Length header.")
+            return
+        if length > MAX_REQUEST_BYTES:
+            self._send(
+                413,
+                "text/plain",
+                b"That chat is too large for one run. Split it into parts and run each part.",
+            )
+            return
         raw = self.rfile.read(length).decode("utf-8", "replace")
         fields = parse_qs(raw)
         chat = (fields.get("chat") or [""])[0]
@@ -68,9 +88,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, "text/plain", b"Paste some chat text first.")
             return
         config = load_config()
-        log = build_ship_log(
-            chat, config, source_label="Web UI paste (Teamily group chat, pasted text)"
-        )
+        try:
+            log = build_ship_log(
+                chat, config, source_label="Web UI paste (Teamily group chat, pasted text)"
+            )
+        except InputError as exc:
+            self._send(400, "text/plain", f"Error: {exc}".encode("utf-8"))
+            return
+        except Exception:
+            self._send(
+                500,
+                "text/plain",
+                b"Something went wrong building the Ship Log. The chat was not saved.",
+            )
+            return
         save_ship_log(log, Path("."), config)
         accesses_panel = render_accesses_html(log.accesses)
         page = (

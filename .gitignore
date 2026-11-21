@@ -1,0 +1,6 @@
+.env
+__pycache__/
+out/
+data/ship-logs/*.md
+data/ship-logs/*.json
+!data/ship-logs/.gitkeep

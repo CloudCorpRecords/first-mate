@@ -1,0 +1,30 @@
+{
+  "run_id": "20261121-022329-9feb38da",
+  "app": "first-mate",
+  "version": "0.2.0",
+  "started_at": "2026-11-21T02:23:21.114889+00:00",
+  "finished_at": "2026-11-21T02:23:29.280493+00:00",
+  "source": "Chat transcript file sample/startup-product-team-chat.txt (Teamily group chat)",
+  "privacy_mode": "Local only",
+  "mode": {
+    "hosting": "local",
+    "privacy_mode": "Local only",
+    "link_reading": "Direct fetch",
+    "inference_route": "Local summary",
+    "context_dev_configured": false,
+    "inference_configured": false,
+    "data_dir": "data/ship-logs",
+    "warnings": []
+  },
+  "counts": {
+    "messages": 15,
+    "links": 2,
+    "links_read_ok": 0,
+    "links_failed": 2,
+    "decisions": 4,
+    "actions": 6,
+    "notes": 5,
+    "accesses_made": 6,
+    "accesses_not_made": 4
+  }
+}

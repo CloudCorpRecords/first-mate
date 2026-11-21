@@ -10,11 +10,14 @@ persist on a Boat.dev VM between runs.
 from __future__ import annotations
 
 import html
+import json
 import re
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import __version__
 from .accesses import AccessLog
 from .config import Config, load_config
 from .context_dev import LinkResult, fetch_links
@@ -30,6 +33,9 @@ class ShipLog:
     links: list[LinkResult]
     transcript: Transcript
     accesses: AccessLog
+    # Structured record of the run: id, timestamps, counts, and modes.
+    # Saved as JSON next to every Ship Log by save_ship_log.
+    metadata: dict = field(default_factory=dict)
 
 
 def _slug_time(now: datetime) -> str:
@@ -176,21 +182,82 @@ def collect_accesses(
     return log
 
 
+def _run_metadata(
+    started: datetime,
+    finished: datetime,
+    transcript: Transcript,
+    links: list[LinkResult],
+    summary: Summary,
+    accesses: AccessLog,
+    config: Config,
+    source_label: str,
+) -> dict:
+    """Structured record of one run, saved as JSON with the Ship Log."""
+    return {
+        "run_id": f"{_slug_time(finished)}-{uuid.uuid4().hex[:8]}",
+        "app": "first-mate",
+        "version": __version__,
+        "started_at": started.isoformat(),
+        "finished_at": finished.isoformat(),
+        "source": source_label,
+        "privacy_mode": summary.mode,
+        "mode": config.mode_summary(),
+        "counts": {
+            "messages": len(transcript.messages),
+            "links": len(links),
+            "links_read_ok": sum(1 for link in links if link.ok),
+            "links_failed": sum(1 for link in links if not link.ok),
+            "decisions": len(transcript.decisions),
+            "actions": len(transcript.actions),
+            "notes": len(transcript.notes),
+            "accesses_made": len(accesses.made),
+            "accesses_not_made": len(accesses.not_made),
+        },
+    }
+
+
+def _minimal_metadata(log: "ShipLog") -> dict:
+    """Metadata for a ShipLog built by hand, without build_ship_log."""
+    now = datetime.now(timezone.utc)
+    return {
+        "run_id": f"{_slug_time(now)}-{uuid.uuid4().hex[:8]}",
+        "app": "first-mate",
+        "version": __version__,
+        "finished_at": now.isoformat(),
+        "privacy_mode": log.summary.mode,
+        "counts": {
+            "messages": len(log.transcript.messages),
+            "links": len(log.links),
+            "links_read_ok": sum(1 for link in log.links if link.ok),
+            "links_failed": sum(1 for link in log.links if not link.ok),
+            "decisions": len(log.transcript.decisions),
+            "actions": len(log.transcript.actions),
+            "notes": len(log.transcript.notes),
+            "accesses_made": len(log.accesses.made),
+            "accesses_not_made": len(log.accesses.not_made),
+        },
+    }
+
+
 def build_ship_log(
     text: str,
     config: Config | None = None,
     source_label: str = "Pasted chat text (Teamily group chat)",
 ) -> ShipLog:
     config = config or load_config()
+    started = datetime.now(timezone.utc)
     transcript = parse_transcript(text)
     links = fetch_links(transcript.links, config)
     titles = [link.title or link.url for link in links]
     excerpts = [link.excerpt for link in links if link.ok]
     summary = summarize(transcript, titles, excerpts, config)
     accesses = collect_accesses(transcript, links, summary, config, source_label)
-    now = datetime.now(timezone.utc)
-    markdown = render_markdown(transcript, links, summary, now, accesses)
+    finished = datetime.now(timezone.utc)
+    markdown = render_markdown(transcript, links, summary, finished, accesses)
     html_page = render_html(markdown, summary)
+    metadata = _run_metadata(
+        started, finished, transcript, links, summary, accesses, config, source_label
+    )
     return ShipLog(
         markdown=markdown,
         html_page=html_page,
@@ -198,6 +265,7 @@ def build_ship_log(
         links=links,
         transcript=transcript,
         accesses=accesses,
+        metadata=metadata,
     )
 
 
@@ -363,7 +431,12 @@ def render_accesses_html(accesses: AccessLog) -> str:
 
 
 def save_ship_log(log: ShipLog, out_dir: Path, config: Config | None = None) -> dict[str, Path]:
-    """Write ship-log.md and ship-log.html, plus an archived copy on disk."""
+    """Write ship-log.md, ship-log.html, and ship-log-meta.json, plus
+    archived copies of the log and its metadata on disk.
+
+    Archive files are named with the run id, so two runs in the same
+    second never overwrite each other.
+    """
     config = config or load_config()
     out_dir.mkdir(parents=True, exist_ok=True)
     md_path = out_dir / "ship-log.md"
@@ -371,9 +444,22 @@ def save_ship_log(log: ShipLog, out_dir: Path, config: Config | None = None) -> 
     md_path.write_text(log.markdown, encoding="utf-8")
     html_path.write_text(log.html_page, encoding="utf-8")
 
+    metadata = log.metadata or _minimal_metadata(log)
+    meta_text = json.dumps(metadata, indent=2) + "\n"
+    meta_path = out_dir / "ship-log-meta.json"
+    meta_path.write_text(meta_text, encoding="utf-8")
+
     store_dir = Path(config.data_dir)
     store_dir.mkdir(parents=True, exist_ok=True)
-    stamp = _slug_time(datetime.now(timezone.utc))
-    archive_path = store_dir / f"ship-log-{stamp}.md"
+    run_id = str(metadata.get("run_id") or _slug_time(datetime.now(timezone.utc)))
+    archive_path = store_dir / f"ship-log-{run_id}.md"
     archive_path.write_text(log.markdown, encoding="utf-8")
-    return {"markdown": md_path, "html": html_path, "archive": archive_path}
+    archive_meta_path = store_dir / f"ship-log-{run_id}-meta.json"
+    archive_meta_path.write_text(meta_text, encoding="utf-8")
+    return {
+        "markdown": md_path,
+        "html": html_path,
+        "metadata": meta_path,
+        "archive": archive_path,
+        "archive_metadata": archive_meta_path,
+    }

@@ -1,0 +1,14 @@
+Kai: Release triage for 2.4, the changelog draft is here https://keepachangelog.com/en/1.1.0/
+Ruth: We decided 2.4 ships with the parser fix only, the new plugin system waits for 2.5
+Kai: Agreed, plugin system is too risky this close to release
+Ruth: TODO Ruth, please write the migration note for the config change by Wednesday
+Omar: I will build the release candidate by Friday and post checksums
+Kai: The failing Windows test is a path separator issue, not a real bug, noted for the thread
+Omar: Someone needs to check the two security reports in the inbox before we tag
+Ruth: I will check the security reports by tomorrow and reply to both reporters
+Kai: Decision: we will tag 2.4 on Monday if the release candidate is green all weekend
+Omar: Sharing the contributor guide for the new reviewers https://docs.github.com/en/get-started
+Ruth: Final: no new features merge after Friday, fixes only
+Kai: TODO Omar, please update the roadmap page by Monday so it matches this plan
+Omar: Also three good first issues are labelled now for the weekend contributors
+Ruth: Perfect, make the Ship Log so the other maintainers see the same plan

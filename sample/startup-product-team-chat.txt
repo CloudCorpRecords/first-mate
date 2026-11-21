@@ -1,0 +1,15 @@
+Priya: Standup notes from this morning are in the doc https://docs.python.org/3/library/http.server.html
+Leo: That link is the wrong one, sorry, that was for the prototype server question
+Priya: Fine, ignore that one. Real update: signups doubled this week and the onboarding flow is where people drop off
+Leo: We decided to cut the signup form from six fields to three, that is locked
+Priya: Agreed, and we will ship the shorter form by Friday
+Leo: TODO Leo, please rewrite the welcome email so it matches the shorter form
+Ana: I will build the new onboarding checklist by Wednesday
+Ana: Also sharing the pricing page draft for comments https://stripe.com/pricing
+Priya: Decision: pricing stays at two tiers for launch, no third tier until we have data
+Leo: Someone needs to check the analytics events before launch, half of them never fire
+Ana: I will check the analytics events by tomorrow and post the list here
+Priya: Final: launch date is the 28th, no moving it again
+Leo: Messy note, support inbox has 40 unread mails, mostly the same password reset question
+Ana: TODO Ana, please write the password reset help page by Monday
+Priya: Good. Ship Log this please so the whole team sees the same list

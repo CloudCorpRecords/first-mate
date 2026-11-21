@@ -3,18 +3,28 @@
 Run from the project root:
   python3 -m unittest discover -s tests -v
 """
+import io
+import json
+import os
 import sys
 import tempfile
+import threading
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from first_mate.config import Config
+from first_mate.cli import health_payload, main
+from first_mate.config import Config, load_config
 from first_mate.context_dev import _html_to_text, fetch_link
 from first_mate.inference import local_summary
+from first_mate.server import Handler
 from first_mate.ship_log import build_ship_log, save_ship_log
-from first_mate.transcript import parse_transcript
+from first_mate.transcript import MAX_INPUT_CHARS, InputError, parse_transcript
 
 SAMPLE = """Maya: We decided to keep it simple
 Rene: I will build the first version by Friday
@@ -157,6 +167,235 @@ class AccessTests(unittest.TestCase):
         self.assertIn("Context.dev: not used, no key", log.markdown)
         self.assertIn("All accesses", log.html_page)
         self.assertIn("NY Token Exchange", log.html_page)
+
+
+class InputRobustnessTests(unittest.TestCase):
+    def test_empty_chat_is_a_clear_error(self):
+        with self.assertRaises(InputError) as ctx:
+            parse_transcript("   \n  \n")
+        self.assertIn("empty", str(ctx.exception))
+
+    def test_oversized_chat_is_a_clear_error(self):
+        big = "A: hello there\n" * (MAX_INPUT_CHARS // 15 + 1)
+        self.assertGreater(len(big), MAX_INPUT_CHARS)
+        with self.assertRaises(InputError) as ctx:
+            parse_transcript(big)
+        self.assertIn("too large", str(ctx.exception))
+
+    def test_malformed_lines_do_not_crash(self):
+        text = (
+            "no speaker on this line\n"
+            "::: only colons\n"
+            "Name:\n"
+            "A: ok, decision: ship it\n"
+            "\x00\x01 binary junk line\n"
+            "B: TODO write the notes\n"
+        )
+        t = parse_transcript(text)
+        self.assertGreaterEqual(len(t.messages), 5)
+        joined = " ".join(m.text for m in t.messages)
+        self.assertNotIn("\x00", joined)
+        self.assertNotIn("\x01", joined)
+        self.assertTrue(any("ship it" in d for d in t.decisions))
+
+    def test_cli_missing_file_returns_2_without_traceback(self):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            code = main(["run", "/nonexistent/first-mate-nope.txt"])
+        self.assertEqual(code, 2)
+        self.assertIn("no such file", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+
+    def test_cli_empty_file_returns_2_without_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "empty.txt"
+            path.write_text("  \n", encoding="utf-8")
+            err = io.StringIO()
+            with redirect_stderr(err):
+                code = main(["run", str(path), "--out", tmp])
+            self.assertEqual(code, 2)
+            self.assertIn("empty", err.getvalue())
+            self.assertNotIn("Traceback", err.getvalue())
+
+    def test_cli_non_utf8_file_returns_2_without_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "binary.bin"
+            path.write_bytes(b"\xff\xfe\x00not text")
+            err = io.StringIO()
+            with redirect_stderr(err):
+                code = main(["run", str(path), "--out", tmp])
+            self.assertEqual(code, 2)
+            self.assertIn("UTF-8", err.getvalue())
+            self.assertNotIn("Traceback", err.getvalue())
+
+    def test_cli_run_happy_path_writes_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chat = Path(tmp) / "chat.txt"
+            chat.write_text(SAMPLE, encoding="utf-8")
+            env = {"FIRST_MATE_DATA_DIR": str(Path(tmp) / "store")}
+            err = io.StringIO()
+            with mock.patch.dict(os.environ, env, clear=False):
+                with redirect_stderr(err):
+                    code = main(["run", str(chat), "--out", tmp])
+            self.assertEqual(code, 0)
+            self.assertTrue((Path(tmp) / "ship-log.md").is_file())
+            meta = json.loads((Path(tmp) / "ship-log-meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["counts"]["messages"], 4)
+            self.assertEqual(meta["privacy_mode"], "Local only")
+
+
+class ConfigCheckTests(unittest.TestCase):
+    def test_bad_port_env_falls_back_to_default(self):
+        # A typo in FIRST_MATE_PORT must not crash startup.
+        with mock.patch.dict(os.environ, {"FIRST_MATE_PORT": "not-a-number"}, clear=False):
+            config = load_config()
+        self.assertEqual(config.port, 8000)
+
+    def test_bad_timeout_env_falls_back_to_default(self):
+        with mock.patch.dict(os.environ, {"FIRST_MATE_FETCH_TIMEOUT": "soon"}, clear=False):
+            config = load_config()
+        self.assertEqual(config.fetch_timeout, 8.0)
+
+    def test_partial_private_route_warns_and_stays_local(self):
+        config = Config(nyte_api_key="key-only")
+        self.assertFalse(config.inference_configured)
+        warnings = config.config_warnings()
+        self.assertTrue(any("partly configured" in w for w in warnings))
+        summary = config.mode_summary()
+        self.assertEqual(summary["privacy_mode"], "Local only")
+        self.assertEqual(summary["inference_route"], "Local summary")
+        self.assertEqual(summary["hosting"], "local")
+
+    def test_fully_configured_mode_summary(self):
+        config = Config(
+            nyte_api_key="k",
+            nyte_base_url="https://example.invalid",
+            nyte_model="m",
+            context_dev_api_key="ck",
+            on_boat_vm=True,
+        )
+        summary = config.mode_summary()
+        self.assertEqual(summary["privacy_mode"], "Private via NYTE")
+        self.assertEqual(summary["link_reading"], "Context.dev")
+        self.assertEqual(summary["hosting"], "Boat VM")
+        self.assertEqual(summary["warnings"], [])
+
+    def test_health_payload_reports_modes_and_storage(self):
+        payload = health_payload()
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["data_dir_writable"])
+        self.assertIn("routes", payload)
+        self.assertIn(payload["routes"]["privacy_mode"], ("Local only", "Private via NYTE"))
+        self.assertIn("warnings", payload["routes"])
+
+    def test_config_command_prints_one_json_object(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = main(["config"])
+        self.assertEqual(code, 0)
+        payload = json.loads(out.getvalue())
+        self.assertEqual(payload["app"], "first-mate")
+        self.assertIn("privacy_mode", payload)
+        self.assertIn("link_reading", payload)
+        self.assertIn("warnings", payload)
+
+
+class MetadataTests(unittest.TestCase):
+    TEXT = (
+        "Maya: We decided to ship it\n"
+        "Rene: I will build it by Friday\n"
+        "Maya: link https://invalid.invalid/x"
+    )
+
+    def _config(self, tmp: str) -> Config:
+        return Config(data_dir=Path(tmp) / "store", fetch_timeout=2.0)
+
+    def test_run_metadata_counts_and_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = build_ship_log(self.TEXT, self._config(tmp))
+        md = log.metadata
+        self.assertTrue(md["run_id"])
+        self.assertIn("started_at", md)
+        self.assertIn("finished_at", md)
+        self.assertEqual(md["counts"]["messages"], 3)
+        self.assertEqual(md["counts"]["links"], 1)
+        self.assertEqual(md["counts"]["links_read_ok"], 0)
+        self.assertEqual(md["counts"]["links_failed"], 1)
+        self.assertEqual(md["counts"]["decisions"], 1)
+        self.assertEqual(md["counts"]["actions"], 1)
+        self.assertEqual(md["privacy_mode"], "Local only")
+        self.assertEqual(md["mode"]["hosting"], "local")
+        self.assertEqual(md["mode"]["link_reading"], "Direct fetch")
+
+    def test_metadata_saved_with_ship_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config(tmp)
+            log = build_ship_log(self.TEXT, config)
+            paths = save_ship_log(log, Path(tmp) / "out", config)
+            self.assertTrue(paths["metadata"].is_file())
+            self.assertTrue(paths["archive_metadata"].is_file())
+            saved = json.loads(paths["metadata"].read_text(encoding="utf-8"))
+            self.assertEqual(saved["run_id"], log.metadata["run_id"])
+            self.assertEqual(saved["counts"]["messages"], 3)
+            archived = json.loads(paths["archive_metadata"].read_text(encoding="utf-8"))
+            self.assertEqual(archived["run_id"], log.metadata["run_id"])
+
+
+class ServerRobustnessTests(unittest.TestCase):
+    def _start(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server
+
+    def test_empty_chat_post_is_400(self):
+        server = self._start()
+        try:
+            conn = HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+            conn.request(
+                "POST",
+                "/ship-log",
+                body="chat=",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            resp = conn.getresponse()
+            resp.read()
+            self.assertEqual(resp.status, 400)
+            conn.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_oversized_body_is_413_without_reading_it(self):
+        server = self._start()
+        try:
+            conn = HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+            conn.putrequest("POST", "/ship-log")
+            conn.putheader("Content-Length", "50000000")
+            conn.endheaders()
+            resp = conn.getresponse()
+            body = resp.read()
+            self.assertEqual(resp.status, 413)
+            self.assertIn(b"too large", body)
+            conn.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_bad_content_length_is_400(self):
+        server = self._start()
+        try:
+            conn = HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+            conn.putrequest("POST", "/ship-log")
+            conn.putheader("Content-Length", "banana")
+            conn.endheaders()
+            resp = conn.getresponse()
+            resp.read()
+            self.assertEqual(resp.status, 400)
+            conn.close()
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":

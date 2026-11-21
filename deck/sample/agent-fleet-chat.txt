@@ -1,0 +1,15 @@
+Operator: Morning fleet report — status, blockers, and anything that needs my call, in this thread
+Lane agent: Finished the onboarding flow rebuild overnight, 41 tests green, the branch is ready to merge
+CI agent: Nightly suite passed on every target, full run log is here https://www.rfc-editor.org/rfc/rfc3986.txt
+Research agent: I will check the pricing comparison against the new provider list by tomorrow
+Comms agent: The launch announcement draft is done, it is only waiting on the final screenshot
+Lane agent: Blocked on the sandbox keys, someone needs to rotate the staging credentials before I can continue
+Operator: TODO Lane agent, please rerun the full suite once the keys land
+Research agent: We decided the digest goes out at 8am, one report, no drip feed
+CI agent: Agreed, failed builds post to this channel only, nowhere else
+Comms agent: I will write the final announcement the moment the screenshot is approved
+Lane agent: The deploy checklist for the operator is here https://www.rfc-editor.org/rfc/rfc9110.txt
+Research agent: Someone needs to check the benchmark numbers before they go into the report
+Operator: Decision: the fleet pauses new work every Friday for a one hour review
+Comms agent: Operator, please approve the deploy before 3pm so the release train leaves on time
+Lane agent: I will set up the release branch suite run tonight and post the result here
